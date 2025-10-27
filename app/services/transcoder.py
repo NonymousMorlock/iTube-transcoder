@@ -64,7 +64,7 @@ class VideoTranscoder:
         logger.info("Starting transcoding: %s -> %s", input_path, output_dir)
         # subprocess.run(self._command_builder(input_path, output_dir, is_hls=False), check=True)
         process = subprocess.run(
-            self._command_builder(input_path, output_dir, is_hls=True),
+            self._command_builder(input_path, output_dir),
             capture_output=True,
             text=True,
         )
