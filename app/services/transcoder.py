@@ -52,6 +52,10 @@ class VideoTranscoder:
             return 'application/vnd.apple.mpegurl'
         elif file_path.endswith('.ts'):
             return 'video/MP2T'
+        elif file_path.endswith('.mpd'):
+            return 'application/dash+xml'
+        elif file_path.endswith('m4s'):
+            return 'video/mp4'
         return None
 
     def download_video(self, local_path: Path):
