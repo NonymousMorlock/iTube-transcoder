@@ -2,9 +2,12 @@ import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import boto3
+import requests
 from botocore.client import BaseClient
+from requests_aws4auth import AWS4Auth
 
 from app.core.config import settings
 
@@ -17,8 +20,13 @@ class TranscodingError(Exception):
     Carries optional process output to aid debugging.
     """
 
-    def __init__(self, message: str, returncode: int | None = None, stdout: str | None = None,
-                 stderr: str | None = None):
+    def __init__(
+            self,
+            message: str,
+            returncode: int | None = None,
+            stdout: str | None = None,
+            stderr: str | None = None
+    ):
         super().__init__(message)
         self.returncode = returncode
         self.stdout = stdout
@@ -119,9 +127,16 @@ class VideoTranscoder:
             self.download_video(local_path=input_path)
             self.transcode_video(input_path=str(input_path), output_dir=str(output_path))
             self.upload_files(prefix=settings.S3_KEY, local_directory=str(output_path))
+            self.update_video_processing_status(video_s3_key=settings.S3_KEY, status='COMPLETED')
         except Exception as e:
-            # Log a concise error (no traceback) and re-raise so the caller (main) decides termination behavior
+            # Log the error and attempt to update status to FAILED
             logger.error("Error during video processing: %s", e)
+            try:
+                self.update_video_processing_status(video_s3_key=settings.S3_KEY, status='FAILED')
+                logger.info("Successfully marked video as FAILED")
+            except Exception as status_error:
+                logger.error("Failed to update video status to FAILED: %s", status_error)
+            # Re-raise the original exception
             raise
         finally:
             if input_path.exists():
@@ -130,6 +145,100 @@ class VideoTranscoder:
                 import shutil
 
                 shutil.rmtree(output_path)
+
+    @staticmethod
+    def _get_aws4_auth() -> AWS4Auth:
+        """Get AWS4Auth object using ECS task role credentials.
+
+        This uses boto3's default credential chain which will automatically
+        use the ECS task role when running in ECS.
+        """
+        # Get credentials from boto3 session (uses ECS task role)
+        session = boto3.Session()
+        credentials = session.get_credentials()
+
+        # Create AWS4Auth for signing requests
+        return AWS4Auth(
+            credentials.access_key,
+            credentials.secret_key,
+            settings.REGION_NAME,
+            'execute-api',  # Service name for API Gateway, or use generic service name
+            session_token=credentials.token,
+        )
+
+    @staticmethod
+    def _lookup_video_id(video_s3_key: str, auth: AWS4Auth) -> Optional[str]:
+        """Lookup video ID by S3 key using IAM-authenticated request.
+
+        Args:
+            video_s3_key: The S3 key of the video
+            auth: AWS4Auth object for signing the request
+
+        Returns:
+            The video ID if found, None otherwise
+
+        Raises:
+            requests.RequestException: If the lookup request fails
+        """
+        logger.info("Looking up video ID for S3 key: %s", video_s3_key)
+
+        try:
+            response = requests.get(
+                url=f"{settings.BACKEND_URL}/api/v1/upload/videos/by-key/{video_s3_key}",
+                auth=auth,
+            )
+            response.raise_for_status()
+            data = response.json()
+            video_id = data.get('video_id')
+            logger.info("Found video ID %s for S3 key %s", video_id, video_s3_key)
+            return video_id
+        except requests.RequestException as e:
+            logger.error("Failed to lookup video ID for S3 key %s: %s", video_s3_key, e)
+            raise
+
+    @staticmethod
+    def update_video_processing_status(video_s3_key: str, status: str) -> None:
+        """Update video processing status using IAM-authenticated requests.
+
+        This method:
+        1. Looks up the video ID by S3 key
+        2. Updates the processing status with the video ID
+        Both requests are signed with AWS SigV4 using the ECS task role.
+
+        Args:
+            video_s3_key: The S3 key of the video
+            status: The new processing status (COMPLETED or FAILED)
+
+        Raises:
+            requests.RequestException: If any request fails
+        """
+        logger.info("Updating video with S3 key %s to status %s", video_s3_key, status)
+
+        try:
+            # Get AWS credentials and create auth object
+            auth = VideoTranscoder._get_aws4_auth()
+
+            # First, lookup the video ID
+            video_id = VideoTranscoder._lookup_video_id(video_s3_key, auth)
+
+            if not video_id:
+                raise ValueError(f"Video not found for S3 key: {video_s3_key}")
+
+            # Now update the status using the video ID
+            logger.info("Updating video ID %s to status %s", video_id, status)
+            response = requests.patch(
+                url=f"{settings.BACKEND_URL}/api/v1/upload/videos/{video_id}/status",
+                params={"status": status},
+                auth=auth,
+            )
+            response.raise_for_status()
+            logger.info("Successfully updated video status for ID %s", video_id)
+        except requests.RequestException as e:
+            logger.error("Failed to update video status for S3 key %s: %s", video_s3_key, e)
+            raise
+        except ValueError as e:
+            logger.error("Video lookup failed: %s", e)
+            raise
 
     @staticmethod
     def _command_builder(input_path: str, output_dir: str, is_hls: bool = False):
