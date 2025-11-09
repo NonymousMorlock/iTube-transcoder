@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     S3_PROCESSED_VIDEOS_BUCKET: str
     S3_BUCKET: str
     S3_KEY: str
+    BACKEND_URL: str
 
 
 settings = Settings()
