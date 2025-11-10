@@ -184,7 +184,7 @@ class VideoTranscoder:
 
         try:
             response = requests.get(
-                url=f"{settings.BACKEND_URL}/api/v1/upload/videos/by-key/{video_s3_key}",
+                url=f"{settings.BACKEND_URL}videos/by-key/{video_s3_key}",
                 auth=auth,
             )
             response.raise_for_status()
@@ -227,7 +227,7 @@ class VideoTranscoder:
             # Now update the status using the video ID
             logger.info("Updating video ID %s to status %s", video_id, status)
             response = requests.patch(
-                url=f"{settings.BACKEND_URL}/api/v1/upload/videos/{video_id}/status",
+                url=f"{settings.BACKEND_URL}/videos/{video_id}/status",
                 params={"status": status},
                 auth=auth,
             )
