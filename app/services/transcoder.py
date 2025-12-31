@@ -184,7 +184,7 @@ class VideoTranscoder:
 
         try:
             response = requests.get(
-                url=f"{settings.BACKEND_URL}videos/by-key/{video_s3_key}",
+                url=f"{settings.BACKEND_URL}/videos/by-key/{video_s3_key}",
                 auth=auth,
             )
             response.raise_for_status()
